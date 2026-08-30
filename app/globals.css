@@ -1,0 +1,348 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+:root {
+  --ink: #1a2233;
+  --ink-soft: #4a5468;
+  --paper: #f3f4f7;
+  --paper-card: #ffffff;
+  --line: #dde1e8;
+  --accent: #2b5fd9;
+  --accent-soft: #eaf0ff;
+  --ok: #0f7a5c;
+  --ok-bg: #e6f5ef;
+  --warn: #b4790f;
+  --warn-bg: #fbf1de;
+  --err: #c23b34;
+  --err-bg: #fbeae8;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  background: var(--paper);
+  background-image: radial-gradient(circle at 1px 1px, #e4e7ee 1px, transparent 0);
+  background-size: 22px 22px;
+  color: var(--ink);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.wrap {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 56px 24px 80px;
+}
+
+.masthead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 14px;
+  margin-bottom: 8px;
+}
+
+.masthead h1 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.masthead .tag {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sub {
+  color: var(--ink-soft);
+  font-size: 14px;
+  margin: 0 0 36px;
+}
+
+.card {
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 28px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 2px rgba(20, 24, 38, 0.04);
+}
+
+.field-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  margin-bottom: 8px;
+}
+
+.field-hint {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin: 6px 0 0;
+}
+
+textarea,
+input[type="text"] {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--ink);
+  background: #fbfbfd;
+  resize: vertical;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+textarea:focus,
+input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: #fff;
+}
+
+textarea {
+  min-height: 140px;
+  line-height: 1.6;
+}
+
+.field-block + .field-block {
+  margin-top: 22px;
+}
+
+.count-pill {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.btn {
+  appearance: none;
+  border: none;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 13px 22px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  transition: transform 0.1s ease, background 0.15s ease, opacity 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: #101725;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 26px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.error-banner {
+  background: var(--err-bg);
+  color: var(--err);
+  border: 1px solid #f2c6c1;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  margin-top: 18px;
+}
+
+.results-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.results-head h2 {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: "JetBrains Mono", monospace;
+  padding: 0;
+}
+
+.link-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.manifest {
+  border-top: 1px dashed var(--line);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 13px 2px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.row-index {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  color: #a2a8b6;
+}
+
+.row-main .row-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-main .row-url {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-main .row-error {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  color: var(--err);
+  margin-top: 3px;
+}
+
+.stamp {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.stamp-imported {
+  color: var(--ok);
+  background: var(--ok-bg);
+  border-color: #bfe3d3;
+}
+
+.stamp-exists {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-color: #efd8a3;
+}
+
+.stamp-failed {
+  color: var(--err);
+  background: var(--err-bg);
+  border-color: #f2c6c1;
+}
+
+.stamp-pending {
+  color: var(--ink-soft);
+  background: #eef0f4;
+  border-color: var(--line);
+}
+
+.summary-strip {
+  display: flex;
+  gap: 18px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.summary-strip b {
+  color: var(--ink);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+footer.note {
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin-top: 32px;
+}
