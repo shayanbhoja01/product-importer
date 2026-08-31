@@ -2,10 +2,36 @@
 
 import { useMemo, useState } from "react";
 import type { ImportResult } from "./api/import/route";
+import type { StockCheckRow } from "./api/stock-check/route";
 
 type RowState = ImportResult & { pending?: boolean };
+type StockRowState = StockCheckRow & { pending?: boolean };
 
 export default function Home() {
+  const [tab, setTab] = useState<"import" | "stock">("import");
+
+  return (
+    <div className="wrap">
+      <div className="masthead">
+        <h1>Product Importer</h1>
+        <span className="tag">manifest v1</span>
+      </div>
+
+      <div className="tabs">
+        <button className={`tab-btn ${tab === "import" ? "tab-btn-active" : ""}`} onClick={() => setTab("import")}>
+          Import Products
+        </button>
+        <button className={`tab-btn ${tab === "stock" ? "tab-btn-active" : ""}`} onClick={() => setTab("stock")}>
+          Check Stock Counts
+        </button>
+      </div>
+
+      {tab === "import" ? <ImportTool /> : <StockCheckTool />}
+    </div>
+  );
+}
+
+function ImportTool() {
   const [urlsText, setUrlsText] = useState("");
   const [tagsText, setTagsText] = useState("");
   const [running, setRunning] = useState(false);
@@ -82,11 +108,7 @@ export default function Home() {
   }
 
   return (
-    <div className="wrap">
-      <div className="masthead">
-        <h1>Product Importer</h1>
-        <span className="tag">manifest v1</span>
-      </div>
+    <>
       <p className="sub">Paste Shopify product URLs, tag them, and bring them into your store.</p>
 
       <div className="card">
@@ -178,7 +200,7 @@ export default function Home() {
       )}
 
       <footer className="note">Imports create products as drafts. Review before publishing.</footer>
-    </div>
+    </>
   );
 }
 
@@ -186,5 +208,149 @@ function StatusStamp({ result }: { result: RowState }) {
   if (result.pending) return <span className="stamp stamp-pending">Pending</span>;
   if (result.status === "Imported") return <span className="stamp stamp-imported">Imported</span>;
   if (result.status === "Already Exists") return <span className="stamp stamp-exists">Already Exists</span>;
+  return <span className="stamp stamp-failed">Failed</span>;
+}
+
+function StockCheckTool() {
+  const [sitesText, setSitesText] = useState("");
+  const [running, setRunning] = useState(false);
+  const [results, setResults] = useState<StockRowState[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const sites = useMemo(
+    () =>
+      sitesText
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [sitesText]
+  );
+
+  const totals = useMemo(() => {
+    return results.reduce(
+      (acc, r) => {
+        if (!r.pending && r.status === "Done") {
+          acc.total += r.totalProducts || 0;
+          acc.inStock += r.inStock || 0;
+          acc.outOfStock += r.outOfStock || 0;
+        }
+        return acc;
+      },
+      { total: 0, inStock: 0, outOfStock: 0 }
+    );
+  }, [results]);
+
+  async function handleCheck() {
+    if (!sites.length || running) return;
+    setError(null);
+    setRunning(true);
+    setResults(sites.map((input) => ({ input, status: "Done", pending: true } as StockRowState)));
+
+    try {
+      const res = await fetch("/api/stock-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sites }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `Request failed (${res.status})`);
+      }
+      setResults(data.results);
+    } catch (err) {
+      setError((err as Error).message);
+      setResults([]);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <>
+      <p className="sub">Paste Shopify store or collection URLs to count total and in-stock products.</p>
+
+      <div className="card">
+        <div className="field-block">
+          <label className="field-label" htmlFor="sites">
+            Websites
+            {sites.length > 0 && <span className="count-pill">{sites.length}</span>}
+          </label>
+          <textarea
+            id="sites"
+            placeholder={"https://source-store.com\nhttps://another-store.com/collections/all"}
+            value={sitesText}
+            onChange={(e) => setSitesText(e.target.value)}
+            disabled={running}
+          />
+          <p className="field-hint">
+            One per line. A bare domain checks the store's "all products" collection; paste a specific
+            collection URL to check just that one.
+          </p>
+        </div>
+
+        <div className="btn-row">
+          <button className="btn" onClick={handleCheck} disabled={!sites.length || running}>
+            {running && <span className="spinner" />}
+            {running ? `Checking ${sites.length} site${sites.length === 1 ? "" : "s"}…` : "Check Stock Counts"}
+          </button>
+        </div>
+
+        {error && <div className="error-banner">{error}</div>}
+      </div>
+
+      {!!results.length && (
+        <div className="card">
+          <div className="results-head">
+            <h2>Results</h2>
+          </div>
+
+          <div className="manifest">
+            {results.map((r, i) => (
+              <div className="row" key={r.input + i}>
+                <span className="row-index mono">{String(i + 1).padStart(2, "0")}</span>
+                <div className="row-main">
+                  <div className="row-title">
+                    {r.pending
+                      ? "Checking…"
+                      : r.status === "Done"
+                      ? `${r.totalProducts} total · ${r.inStock} in stock · ${r.outOfStock} out of stock`
+                      : "—"}
+                  </div>
+                  <div className="row-url">{r.collectionUrl || r.input}</div>
+                  {r.status === "Failed" && r.error && <div className="row-error">{r.error}</div>}
+                </div>
+                <StockStamp result={r} />
+              </div>
+            ))}
+          </div>
+
+          {!running && (
+            <div className="summary-strip">
+              <span>
+                <b>{totals.total}</b> total products
+              </span>
+              <span>
+                <b>{totals.inStock}</b> in stock
+              </span>
+              <span>
+                <b>{totals.outOfStock}</b> out of stock
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!results.length && (
+        <div className="card">
+          <div className="empty-state">No checks run yet. Paste website URLs above to get started.</div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function StockStamp({ result }: { result: StockRowState }) {
+  if (result.pending) return <span className="stamp stamp-pending">Pending</span>;
+  if (result.status === "Done") return <span className="stamp stamp-imported">Done</span>;
   return <span className="stamp stamp-failed">Failed</span>;
 }

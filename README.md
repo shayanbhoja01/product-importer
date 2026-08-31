@@ -6,6 +6,10 @@ destination store, with images, variants, and tags applied.
 
 No database, no queues, no complex dashboard — just the import flow.
 
+It also has a second tab: **Check Stock Counts** — paste any Shopify store or
+collection URL and see total vs. in-stock product counts, pulled the same
+no-scraping way from Shopify's public collection JSON feed.
+
 ## How it works
 
 1. For each pasted URL, the app calls the source store's built-in
@@ -65,6 +69,17 @@ npm run dev
 ```
 
 Visit `http://localhost:3000`.
+
+## Stock Count Checker (second tab)
+
+- Paste a bare domain (e.g. `source-store.com`) to check that store's default
+  "all products" collection, or a specific collection URL
+  (e.g. `source-store.com/collections/summer-sale`) to check just that one.
+- Pulls every product in the collection (handles pagination automatically, up
+  to 10,000 products) via Shopify's public `/collections/{handle}/products.json`
+  feed — same principle as the importer, so it only works on Shopify stores.
+- A product counts as "in stock" if at least one of its variants is available.
+- This only reports counts — it doesn't create, modify, or import anything.
 
 ## Notes & limits
 

@@ -77,6 +77,37 @@ body {
   margin: 0 0 36px;
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 20px 0 28px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab-btn {
+  appearance: none;
+  border: none;
+  background: none;
+  font-family: "Inter", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  padding: 10px 4px;
+  margin-right: 22px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transform: translateY(1px);
+}
+
+.tab-btn:hover {
+  color: var(--ink);
+}
+
+.tab-btn-active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
 .card {
   background: var(--paper-card);
   border: 1px solid var(--line);
