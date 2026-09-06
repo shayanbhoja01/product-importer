@@ -1,7 +1,21 @@
-// Checks product counts (total vs. in-stock) for a Shopify collection page
-// using the storefront's public `/collections/{handle}/products.json` feed.
-// Same principle as the importer: no HTML scraping, just Shopify's own
-// structured JSON, so this only works against live Shopify stores.
+// Checks product counts (total vs. in-stock) for a Shopify collection,
+// matching what a real visitor sees when browsing the storefront page and
+// clicking "Load More" — not just Shopify's raw backend collection
+// membership, which can be larger than what a theme actually displays.
+//
+// Approach:
+//  1. Pull the collection's public JSON feed (`/collections/{handle}/products.json`)
+//     to get accurate per-product stock availability.
+//  2. Separately walk the actual storefront collection pages
+//     (`/collections/{handle}?page=N`, plain HTML) and count the distinct
+//     product links that really render there — this is the number a
+//     shopper would get by clicking "Load More" until the end.
+//  3. Report the storefront-visible count as the total, using the JSON
+//     data to determine which of those visible products are in stock.
+//  4. If the storefront pages don't yield any product links at all (e.g. a
+//     fully JS-rendered/headless storefront our plain HTML fetch can't
+//     see), fall back to the JSON feed's totals and flag that a fallback
+//     was used, rather than silently reporting zero.
 
 export interface StockCheckResult {
   input: string;
@@ -9,6 +23,8 @@ export interface StockCheckResult {
   totalProducts: number;
   inStock: number;
   outOfStock: number;
+  /** How the total was determined — for transparency in the UI. */
+  countedFrom: "storefront" | "collection-data";
 }
 
 /** Generic failure: network error, timeout, unexpected server error, etc. */
@@ -21,9 +37,12 @@ export class StockCheckError extends Error {}
  */
 export class NotShopifyError extends StockCheckError {}
 
-const PAGE_SIZE = 250; // Shopify's max page size for this endpoint
+const PAGE_SIZE = 250; // Shopify's max page size for the JSON feed
 const MAX_PAGES = 40; // safety cap (=10,000 products) to avoid runaway loops
 const PAGE_BATCH_SIZE = 6; // pages fetched concurrently per round, to stay fast
+
+const MAX_HTML_PAGES = 30; // safety cap for storefront pagination walk
+const HTML_BATCH_SIZE = 4; // storefront pages fetched concurrently per round
 
 /**
  * Accepts either a bare store domain, a homepage URL, or a full collection
@@ -48,15 +67,20 @@ function resolveCollectionFeed(input: string): { origin: string; handle: string 
   return { origin: `${parsed.protocol}//${parsed.host}`, handle };
 }
 
+interface ProductInfo {
+  handle: string;
+  available: boolean;
+}
+
 interface PageFetch {
   products: any[];
 }
 
 /**
- * Fetches one page of a collection feed. Classifies failures so callers can
- * tell "definitely not Shopify" apart from "network hiccup / transient error".
+ * Fetches one page of the collection's JSON feed. Classifies failures so
+ * callers can tell "definitely not Shopify" apart from a transient error.
  */
-async function fetchPage(origin: string, handle: string, page: number): Promise<PageFetch> {
+async function fetchJsonPage(origin: string, handle: string, page: number): Promise<PageFetch> {
   const url = `${origin}/collections/${handle}/products.json?limit=${PAGE_SIZE}&page=${page}`;
   let res: Response;
   try {
@@ -66,8 +90,6 @@ async function fetchPage(origin: string, handle: string, page: number): Promise<
   }
 
   if (res.status === 404) {
-    // 404 on Shopify's own collection endpoint most often means either the
-    // collection handle doesn't exist, or this isn't a Shopify store at all.
     throw new NotShopifyError(`${origin} returned 404 for collection "${handle}".`);
   }
   if (!res.ok) {
@@ -100,19 +122,17 @@ async function fetchPage(origin: string, handle: string, page: number): Promise<
 }
 
 /**
- * Fetch every product in a collection and count stock status.
- *
- * Pages are fetched in concurrent batches (rather than one at a time) to
- * keep total wall-clock time low — this matters because each site check
- * runs inside a single serverless function call with a hard time limit, and
- * sequential page-by-page fetching for a large catalog could exceed it.
+ * Fetch every product in a collection's JSON feed and return per-product
+ * stock availability, keyed by handle. This is Shopify's raw collection
+ * membership — it can include more products than a theme actually renders
+ * (see module doc comment), so it's used only as an availability lookup,
+ * not as the reported total.
  */
-async function pullAllPages(
+async function pullJsonAvailability(
   origin: string,
   handle: string
-): Promise<{ total: number; inStock: number }> {
-  let total = 0;
-  let inStock = 0;
+): Promise<Map<string, boolean>> {
+  const availability = new Map<string, boolean>();
   let nextPage = 1;
   let reachedEnd = false;
 
@@ -122,49 +142,146 @@ async function pullAllPages(
       (_, i) => nextPage + i
     );
 
-    const batchResults = await Promise.all(
-      batchPages.map((p) => fetchPage(origin, handle, p))
-    );
+    const batchResults = await Promise.all(batchPages.map((p) => fetchJsonPage(origin, handle, p)));
 
     for (const { products } of batchResults) {
       if (!products.length) {
         reachedEnd = true;
-        break; // an empty page means every page after it is also empty
+        break;
       }
       for (const product of products) {
-        total += 1;
         const variants = Array.isArray(product.variants) ? product.variants : [];
-        if (variants.some((v: any) => v.available === true)) inStock += 1;
+        const available = variants.some((v: any) => v.available === true);
+        if (product.handle) availability.set(product.handle, available);
       }
       if (products.length < PAGE_SIZE) {
         reachedEnd = true;
-        break; // a short page is always the last page
+        break;
       }
     }
 
     nextPage += batchPages.length;
   }
 
-  return { total, inStock };
+  return availability;
+}
+
+/** Extracts distinct product handles (e.g. "co-21") from a collection page's raw HTML. */
+function extractProductHandles(html: string): Set<string> {
+  const handles = new Set<string>();
+  // Matches /products/{handle} regardless of an optional locale prefix
+  // (e.g. /en-us/products/co-21) and ignores query strings/fragments.
+  const regex = /\/products\/([a-zA-Z0-9%_-]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(html))) {
+    try {
+      handles.add(decodeURIComponent(m[1]));
+    } catch {
+      handles.add(m[1]);
+    }
+  }
+  return handles;
+}
+
+async function fetchCollectionHtml(origin: string, handle: string, page: number): Promise<string | null> {
+  const url = `${origin}/collections/${handle}?page=${page}`;
+  try {
+    const res = await fetch(url, { headers: { Accept: "text/html" }, cache: "no-store" });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Fetch every product in a collection (across pages) and count stock status.
- * If the URL pointed at a specific (non-"all") collection and that fails,
- * automatically falls back to checking the store's "all products" collection
- * before concluding the site isn't Shopify.
+ * Walks the actual storefront collection pages (plain HTML, the same pages
+ * a shopper's "Load More" button pages through) and returns the set of
+ * distinct product handles that genuinely render there. Stops once a page
+ * contributes no new products — that's the real end of the list.
+ *
+ * Returns an empty set if the storefront pages don't contain recognizable
+ * product links at all (e.g. a fully JS-rendered storefront), signaling
+ * callers to fall back to the JSON feed's totals instead.
+ */
+async function fetchStorefrontHandles(origin: string, handle: string): Promise<Set<string>> {
+  const seen = new Set<string>();
+  let page = 1;
+
+  while (page <= MAX_HTML_PAGES) {
+    const batchPages = Array.from(
+      { length: Math.min(HTML_BATCH_SIZE, MAX_HTML_PAGES - page + 1) },
+      (_, i) => page + i
+    );
+
+    const batchHtml = await Promise.all(batchPages.map((p) => fetchCollectionHtml(origin, handle, p)));
+
+    let stop = false;
+    for (const html of batchHtml) {
+      if (!html) {
+        stop = true;
+        break;
+      }
+      const before = seen.size;
+      for (const h of extractProductHandles(html)) seen.add(h);
+      if (seen.size === before) {
+        // This page added nothing new — we've reached the end of the list.
+        stop = true;
+        break;
+      }
+    }
+
+    if (stop) break;
+    page += batchPages.length;
+  }
+
+  return seen;
+}
+
+/**
+ * Fetch a collection's stock counts, matching what a real visitor sees on
+ * the storefront. If the URL pointed at a specific (non-"all") collection
+ * and that fails, automatically falls back to checking the store's "all
+ * products" collection before concluding the site isn't Shopify.
  */
 export async function checkCollectionStock(input: string): Promise<StockCheckResult> {
   const { origin, handle } = resolveCollectionFeed(input);
 
   async function pull(handleToUse: string): Promise<StockCheckResult> {
-    const { total, inStock } = await pullAllPages(origin, handleToUse);
+    // Run both lookups concurrently — they're independent data sources.
+    const [availability, storefrontHandles] = await Promise.all([
+      pullJsonAvailability(origin, handleToUse),
+      fetchStorefrontHandles(origin, handleToUse),
+    ]);
+
+    if (storefrontHandles.size > 0) {
+      let inStock = 0;
+      for (const h of storefrontHandles) {
+        if (availability.get(h)) inStock += 1;
+      }
+      const total = storefrontHandles.size;
+      return {
+        input,
+        collectionUrl: `${origin}/collections/${handleToUse}`,
+        totalProducts: total,
+        inStock,
+        outOfStock: total - inStock,
+        countedFrom: "storefront",
+      };
+    }
+
+    // Fallback: storefront HTML didn't yield any product links (e.g. a
+    // headless/JS-rendered storefront) — report the JSON feed's totals
+    // instead of a false zero, flagged so the UI can note the difference.
+    const total = availability.size;
+    const inStock = Array.from(availability.values()).filter(Boolean).length;
     return {
       input,
       collectionUrl: `${origin}/collections/${handleToUse}`,
       totalProducts: total,
       inStock,
       outOfStock: total - inStock,
+      countedFrom: "collection-data",
     };
   }
 
