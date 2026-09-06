@@ -226,6 +226,14 @@ function StockCheckTool() {
     [sitesText]
   );
 
+  const counts = useMemo(() => {
+    const c = { Done: 0, Skipped: 0, Failed: 0 };
+    for (const r of results) {
+      if (!r.pending) c[r.status] += 1;
+    }
+    return c;
+  }, [results]);
+
   const totals = useMemo(() => {
     return results.reduce(
       (acc, r) => {
@@ -265,9 +273,39 @@ function StockCheckTool() {
     }
   }
 
+  function downloadLog() {
+    if (!results.length) return;
+    const header = "Website,Status,Collection Checked,Total Products,In Stock,Out of Stock,Note\n";
+    const rows = results
+      .map((r) => {
+        const cell = (v: string | number | undefined) =>
+          `"${String(v ?? "").replace(/"/g, '""')}"`;
+        return [
+          cell(r.input),
+          cell(r.status),
+          cell(r.collectionUrl || ""),
+          cell(r.totalProducts ?? ""),
+          cell(r.inStock ?? ""),
+          cell(r.outOfStock ?? ""),
+          cell(r.note || ""),
+        ].join(",");
+      })
+      .join("\n");
+    const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.href = URL.createObjectURL(blob);
+    link.download = `stock-check-log-${stamp}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
   return (
     <>
-      <p className="sub">Paste Shopify store or collection URLs to count total and in-stock products.</p>
+      <p className="sub">
+        Paste any mix of website URLs — non-Shopify sites are automatically skipped, and the rest
+        get counted.
+      </p>
 
       <div className="card">
         <div className="field-block">
@@ -277,14 +315,15 @@ function StockCheckTool() {
           </label>
           <textarea
             id="sites"
-            placeholder={"https://source-store.com\nhttps://another-store.com/collections/all"}
+            placeholder={"https://source-store.com\nhttps://another-store.com/collections/all\nhttps://some-non-shopify-site.com"}
             value={sitesText}
             onChange={(e) => setSitesText(e.target.value)}
             disabled={running}
           />
           <p className="field-hint">
             One per line. A bare domain checks the store's "all products" collection; paste a specific
-            collection URL to check just that one.
+            collection URL to check just that one. Sites that aren't Shopify stores are skipped, not
+            treated as errors.
           </p>
         </div>
 
@@ -293,6 +332,11 @@ function StockCheckTool() {
             {running && <span className="spinner" />}
             {running ? `Checking ${sites.length} site${sites.length === 1 ? "" : "s"}…` : "Check Stock Counts"}
           </button>
+          {!!results.length && !running && (
+            <button className="link-btn" onClick={downloadLog}>
+              ↓ Download log (.csv)
+            </button>
+          )}
         </div>
 
         {error && <div className="error-banner">{error}</div>}
@@ -314,10 +358,12 @@ function StockCheckTool() {
                       ? "Checking…"
                       : r.status === "Done"
                       ? `${r.totalProducts} total · ${r.inStock} in stock · ${r.outOfStock} out of stock`
+                      : r.status === "Skipped"
+                      ? "Not a Shopify store"
                       : "—"}
                   </div>
                   <div className="row-url">{r.collectionUrl || r.input}</div>
-                  {r.status === "Failed" && r.error && <div className="row-error">{r.error}</div>}
+                  {r.status === "Failed" && r.note && <div className="row-error">{r.note}</div>}
                 </div>
                 <StockStamp result={r} />
               </div>
@@ -326,6 +372,15 @@ function StockCheckTool() {
 
           {!running && (
             <div className="summary-strip">
+              <span>
+                <b>{counts.Done}</b> checked
+              </span>
+              <span>
+                <b>{counts.Skipped}</b> skipped (not Shopify)
+              </span>
+              <span>
+                <b>{counts.Failed}</b> failed
+              </span>
               <span>
                 <b>{totals.total}</b> total products
               </span>
@@ -352,5 +407,6 @@ function StockCheckTool() {
 function StockStamp({ result }: { result: StockRowState }) {
   if (result.pending) return <span className="stamp stamp-pending">Pending</span>;
   if (result.status === "Done") return <span className="stamp stamp-imported">Done</span>;
+  if (result.status === "Skipped") return <span className="stamp stamp-exists">Skipped</span>;
   return <span className="stamp stamp-failed">Failed</span>;
 }

@@ -11,7 +11,15 @@ export interface StockCheckResult {
   outOfStock: number;
 }
 
+/** Generic failure: network error, timeout, unexpected server error, etc. */
 export class StockCheckError extends Error {}
+
+/**
+ * Raised specifically when the site does not appear to be a Shopify store
+ * at all (no valid Shopify product feed found), as opposed to a transient
+ * network problem. Used to distinguish "skip — not Shopify" from "failed".
+ */
+export class NotShopifyError extends StockCheckError {}
 
 const PAGE_SIZE = 250; // Shopify's max page size for this endpoint
 const MAX_PAGES = 40; // safety cap (=10,000 products) to avoid runaway loops
@@ -39,7 +47,15 @@ function resolveCollectionFeed(input: string): { origin: string; handle: string 
   return { origin: `${parsed.protocol}//${parsed.host}`, handle };
 }
 
-async function fetchPage(origin: string, handle: string, page: number): Promise<any[]> {
+interface PageFetch {
+  products: any[];
+}
+
+/**
+ * Fetches one page of a collection feed. Classifies failures so callers can
+ * tell "definitely not Shopify" apart from "network hiccup / transient error".
+ */
+async function fetchPage(origin: string, handle: string, page: number): Promise<PageFetch> {
   const url = `${origin}/collections/${handle}/products.json?limit=${PAGE_SIZE}&page=${page}`;
   let res: Response;
   try {
@@ -48,9 +64,21 @@ async function fetchPage(origin: string, handle: string, page: number): Promise<
     throw new StockCheckError(`Could not reach ${origin} (${(err as Error).message}).`);
   }
 
+  if (res.status === 404) {
+    // 404 on Shopify's own collection endpoint most often means either the
+    // collection handle doesn't exist, or this isn't a Shopify store at all.
+    throw new NotShopifyError(`${origin} returned 404 for collection "${handle}".`);
+  }
   if (!res.ok) {
     throw new StockCheckError(
-      `${origin} returned ${res.status} for collection "${handle}". It may not exist, be password-protected, or this may not be a Shopify store.`
+      `${origin} returned ${res.status} for collection "${handle}". It may be password-protected or temporarily unavailable.`
+    );
+  }
+
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("json")) {
+    throw new NotShopifyError(
+      `${origin} did not return JSON (got "${contentType || "unknown"}") — this doesn't look like a Shopify store.`
     );
   }
 
@@ -58,45 +86,69 @@ async function fetchPage(origin: string, handle: string, page: number): Promise<
   try {
     data = await res.json();
   } catch {
-    throw new StockCheckError(
-      `${origin} didn't return valid product JSON — it may not be a Shopify store.`
+    throw new NotShopifyError(`${origin} did not return valid JSON — this doesn't look like a Shopify store.`);
+  }
+
+  if (!data || !Array.isArray(data.products)) {
+    throw new NotShopifyError(
+      `${origin} responded, but not in Shopify's product-feed format — this doesn't look like a Shopify store.`
     );
   }
 
-  if (!Array.isArray(data.products)) {
-    throw new StockCheckError(`Unexpected response shape from ${origin}.`);
-  }
-  return data.products;
+  return { products: data.products };
 }
 
-/** Fetch every product in a collection (across pages) and count stock status. */
+/**
+ * Fetch every product in a collection (across pages) and count stock status.
+ * If the URL pointed at a specific (non-"all") collection and that fails,
+ * automatically falls back to checking the store's "all products" collection
+ * before concluding the site isn't Shopify.
+ */
 export async function checkCollectionStock(input: string): Promise<StockCheckResult> {
   const { origin, handle } = resolveCollectionFeed(input);
 
-  let total = 0;
-  let inStock = 0;
-  let page = 1;
+  async function pull(handleToUse: string): Promise<StockCheckResult> {
+    let total = 0;
+    let inStock = 0;
+    let page = 1;
 
-  while (page <= MAX_PAGES) {
-    const products = await fetchPage(origin, handle, page);
-    if (!products.length) break;
+    while (page <= MAX_PAGES) {
+      const { products } = await fetchPage(origin, handleToUse, page);
+      if (!products.length) break;
 
-    for (const product of products) {
-      total += 1;
-      const variants = Array.isArray(product.variants) ? product.variants : [];
-      const hasStock = variants.some((v: any) => v.available === true);
-      if (hasStock) inStock += 1;
+      for (const product of products) {
+        total += 1;
+        const variants = Array.isArray(product.variants) ? product.variants : [];
+        const hasStock = variants.some((v: any) => v.available === true);
+        if (hasStock) inStock += 1;
+      }
+
+      if (products.length < PAGE_SIZE) break; // last page
+      page += 1;
     }
 
-    if (products.length < PAGE_SIZE) break; // last page
-    page += 1;
+    return {
+      input,
+      collectionUrl: `${origin}/collections/${handleToUse}`,
+      totalProducts: total,
+      inStock,
+      outOfStock: total - inStock,
+    };
   }
 
-  return {
-    input,
-    collectionUrl: `${origin}/collections/${handle}`,
-    totalProducts: total,
-    inStock,
-    outOfStock: total - inStock,
-  };
+  try {
+    return await pull(handle);
+  } catch (err) {
+    // If a specific collection handle failed, give the store one more
+    // chance via its default "all products" collection before giving up —
+    // avoids false "not Shopify" verdicts caused by a wrong/renamed handle.
+    if (handle !== "all" && err instanceof NotShopifyError) {
+      try {
+        return await pull("all");
+      } catch {
+        throw err; // report the original error, it's the more informative one
+      }
+    }
+    throw err;
+  }
 }

@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkCollectionStock, StockCheckError } from "@/lib/shopify-collection";
+import { checkCollectionStock, NotShopifyError, StockCheckError } from "@/lib/shopify-collection";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export interface StockCheckRow {
   input: string;
-  status: "Done" | "Failed";
+  status: "Done" | "Skipped" | "Failed";
   collectionUrl?: string;
   totalProducts?: number;
   inStock?: number;
   outOfStock?: number;
-  error?: string;
+  note?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -41,8 +41,16 @@ export async function POST(req: NextRequest) {
         outOfStock: r.outOfStock,
       });
     } catch (err) {
-      const message = err instanceof StockCheckError ? err.message : (err as Error).message;
-      results.push({ input: site, status: "Failed", error: message || "Unknown error." });
+      if (err instanceof NotShopifyError) {
+        // Not a Shopify store (or no matching collection found even after
+        // falling back to "all") — skip it rather than counting it as a
+        // hard failure, since this is an expected, normal outcome for a
+        // mixed list of websites.
+        results.push({ input: site, status: "Skipped", note: "Not a Shopify store — skipped." });
+      } else {
+        const message = err instanceof StockCheckError ? err.message : (err as Error).message;
+        results.push({ input: site, status: "Failed", note: message || "Unknown error." });
+      }
     }
   }
 
