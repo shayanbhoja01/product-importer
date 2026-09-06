@@ -23,6 +23,7 @@ export class NotShopifyError extends StockCheckError {}
 
 const PAGE_SIZE = 250; // Shopify's max page size for this endpoint
 const MAX_PAGES = 40; // safety cap (=10,000 products) to avoid runaway loops
+const PAGE_BATCH_SIZE = 6; // pages fetched concurrently per round, to stay fast
 
 /**
  * Accepts either a bare store domain, a homepage URL, or a full collection
@@ -99,6 +100,55 @@ async function fetchPage(origin: string, handle: string, page: number): Promise<
 }
 
 /**
+ * Fetch every product in a collection and count stock status.
+ *
+ * Pages are fetched in concurrent batches (rather than one at a time) to
+ * keep total wall-clock time low — this matters because each site check
+ * runs inside a single serverless function call with a hard time limit, and
+ * sequential page-by-page fetching for a large catalog could exceed it.
+ */
+async function pullAllPages(
+  origin: string,
+  handle: string
+): Promise<{ total: number; inStock: number }> {
+  let total = 0;
+  let inStock = 0;
+  let nextPage = 1;
+  let reachedEnd = false;
+
+  while (!reachedEnd && nextPage <= MAX_PAGES) {
+    const batchPages = Array.from(
+      { length: Math.min(PAGE_BATCH_SIZE, MAX_PAGES - nextPage + 1) },
+      (_, i) => nextPage + i
+    );
+
+    const batchResults = await Promise.all(
+      batchPages.map((p) => fetchPage(origin, handle, p))
+    );
+
+    for (const { products } of batchResults) {
+      if (!products.length) {
+        reachedEnd = true;
+        break; // an empty page means every page after it is also empty
+      }
+      for (const product of products) {
+        total += 1;
+        const variants = Array.isArray(product.variants) ? product.variants : [];
+        if (variants.some((v: any) => v.available === true)) inStock += 1;
+      }
+      if (products.length < PAGE_SIZE) {
+        reachedEnd = true;
+        break; // a short page is always the last page
+      }
+    }
+
+    nextPage += batchPages.length;
+  }
+
+  return { total, inStock };
+}
+
+/**
  * Fetch every product in a collection (across pages) and count stock status.
  * If the URL pointed at a specific (non-"all") collection and that fails,
  * automatically falls back to checking the store's "all products" collection
@@ -108,25 +158,7 @@ export async function checkCollectionStock(input: string): Promise<StockCheckRes
   const { origin, handle } = resolveCollectionFeed(input);
 
   async function pull(handleToUse: string): Promise<StockCheckResult> {
-    let total = 0;
-    let inStock = 0;
-    let page = 1;
-
-    while (page <= MAX_PAGES) {
-      const { products } = await fetchPage(origin, handleToUse, page);
-      if (!products.length) break;
-
-      for (const product of products) {
-        total += 1;
-        const variants = Array.isArray(product.variants) ? product.variants : [];
-        const hasStock = variants.some((v: any) => v.available === true);
-        if (hasStock) inStock += 1;
-      }
-
-      if (products.length < PAGE_SIZE) break; // last page
-      page += 1;
-    }
-
+    const { total, inStock } = await pullAllPages(origin, handleToUse);
     return {
       input,
       collectionUrl: `${origin}/collections/${handleToUse}`,
