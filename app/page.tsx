@@ -301,7 +301,8 @@ function StockCheckTool() {
 
   function downloadLog() {
     if (!results.length) return;
-    const header = "Website,Status,Collection Checked,Total Products,In Stock,Out of Stock,Note\n";
+    const header =
+      "Website,Status,Collection Checked,Total Products,In Stock,Out of Stock,Counted From,Note\n";
     const rows = results
       .map((r) => {
         const cell = (v: string | number | undefined) =>
@@ -313,6 +314,7 @@ function StockCheckTool() {
           cell(r.totalProducts ?? ""),
           cell(r.inStock ?? ""),
           cell(r.outOfStock ?? ""),
+          cell(r.countedFrom === "storefront" ? "Storefront page" : r.countedFrom === "collection-data" ? "Shopify collection data (fallback)" : ""),
           cell(r.note || ""),
         ].join(",");
       })
@@ -329,8 +331,8 @@ function StockCheckTool() {
   return (
     <>
       <p className="sub">
-        Paste any mix of website URLs — non-Shopify sites are automatically skipped, and the rest
-        get counted.
+        Paste any mix of website URLs — non-Shopify sites are automatically skipped, and counts
+        match what a shopper actually sees on the store's page.
       </p>
 
       <div className="card">
@@ -390,6 +392,11 @@ function StockCheckTool() {
                   </div>
                   <div className="row-url">{r.collectionUrl || r.input}</div>
                   {r.status === "Failed" && r.note && <div className="row-error">{r.note}</div>}
+                  {r.status === "Done" && r.countedFrom === "collection-data" && (
+                    <div className="row-note">
+                      Storefront page count unavailable — showing Shopify's raw collection data instead.
+                    </div>
+                  )}
                 </div>
                 <StockStamp result={r} />
               </div>

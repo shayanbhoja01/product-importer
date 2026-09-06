@@ -313,6 +313,13 @@ textarea {
   margin-top: 3px;
 }
 
+.row-main .row-note {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  color: var(--warn);
+  margin-top: 3px;
+}
+
 .stamp {
   font-family: "JetBrains Mono", monospace;
   font-size: 10.5px;

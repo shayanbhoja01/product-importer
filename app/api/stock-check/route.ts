@@ -11,6 +11,7 @@ export interface StockCheckRow {
   totalProducts?: number;
   inStock?: number;
   outOfStock?: number;
+  countedFrom?: "storefront" | "collection-data";
   note?: string;
 }
 
@@ -39,6 +40,11 @@ export async function POST(req: NextRequest) {
         totalProducts: r.totalProducts,
         inStock: r.inStock,
         outOfStock: r.outOfStock,
+        countedFrom: r.countedFrom,
+        note:
+          r.countedFrom === "collection-data"
+            ? "Storefront page count unavailable — showing Shopify's full collection data instead."
+            : undefined,
       });
     } catch (err) {
       if (err instanceof NotShopifyError) {
