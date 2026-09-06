@@ -75,10 +75,32 @@ Visit `http://localhost:3000`.
 - Paste a bare domain (e.g. `source-store.com`) to check that store's default
   "all products" collection, or a specific collection URL
   (e.g. `source-store.com/collections/summer-sale`) to check just that one.
-- Pulls every product in the collection (handles pagination automatically, up
-  to 10,000 products) via Shopify's public `/collections/{handle}/products.json`
-  feed — same principle as the importer, so it only works on Shopify stores.
+- **Counts match what a real shopper sees on the storefront page**, not
+  just Shopify's raw backend collection data. Some stores' themes limit or
+  curate what's visibly browsable on a collection page (via "Load More"
+  pagination) to fewer products than the collection technically contains
+  in Shopify's database — this tool counts the former, since that's what's
+  actually reachable by a visitor.
+  - If a storefront's pages can't be read this way (e.g. a fully
+    JS-rendered/headless storefront with no server-rendered product links),
+    it automatically falls back to Shopify's collection JSON data instead
+    of reporting zero, and flags this in the result with a note.
 - A product counts as "in stock" if at least one of its variants is available.
+- **You can paste a mixed list of Shopify and non-Shopify sites.** Sites that
+  aren't Shopify stores are automatically detected and marked **Skipped**
+  (not counted as errors) so the rest of the batch still gets checked. Sites
+  that are unreachable (wrong domain, network issue) are marked **Failed**
+  instead, since that's a different kind of problem worth noticing.
+- If a specific collection URL doesn't exist on an otherwise-valid Shopify
+  store, it automatically falls back to checking that store's "all products"
+  collection before concluding it isn't Shopify.
+- Each website is checked as its own request, and pages within a store are
+  fetched in parallel batches rather than one at a time — this keeps large
+  catalogs fast and means one slow site can't block or fail the rest of the
+  list. If you see "Timed out" on a single very large store's row, it's safe
+  to retry just that one line on its own.
+- Results can be downloaded as a CSV log (website, status, counts, notes) —
+  same as the importer's log.
 - This only reports counts — it doesn't create, modify, or import anything.
 
 ## Notes & limits
