@@ -254,23 +254,49 @@ function StockCheckTool() {
     setRunning(true);
     setResults(sites.map((input) => ({ input, status: "Done", pending: true } as StockRowState)));
 
-    try {
-      const res = await fetch("/api/stock-check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sites }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || `Request failed (${res.status})`);
+    // Check one site per request, updating results as each one finishes.
+    // Keeps each server call fast (avoids serverless timeouts on large
+    // catalogs) and means one slow/stuck site can't block the rest.
+    for (let i = 0; i < sites.length; i++) {
+      const site = sites[i];
+      try {
+        const res = await fetch("/api/stock-check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sites: [site] }),
+        });
+
+        let data: any;
+        try {
+          data = await res.json();
+        } catch {
+          throw new Error(
+            res.status === 504
+              ? "Timed out — this store's catalog may be too large to check in one request."
+              : `Server returned an unexpected response (HTTP ${res.status}).`
+          );
+        }
+
+        if (!res.ok) {
+          throw new Error(data.error || `Request failed (${res.status})`);
+        }
+
+        const row: StockRowState = data.results?.[0] || {
+          input: site,
+          status: "Failed",
+          note: "No result returned.",
+        };
+        setResults((prev) => prev.map((r, idx) => (idx === i ? row : r)));
+      } catch (err) {
+        setResults((prev) =>
+          prev.map((r, idx) =>
+            idx === i ? { input: site, status: "Failed", note: (err as Error).message } : r
+          )
+        );
       }
-      setResults(data.results);
-    } catch (err) {
-      setError((err as Error).message);
-      setResults([]);
-    } finally {
-      setRunning(false);
     }
+
+    setRunning(false);
   }
 
   function downloadLog() {
