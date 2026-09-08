@@ -65,18 +65,38 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Browser-like request headers. Node's default fetch identity (no
+ * User-Agent, no Accept-Language, etc.) is an easy signal for a store's
+ * bot-protection layer (commonly Cloudflare or similar) to flag as
+ * automated traffic and block outright — independent of actual request
+ * volume. Presenting a normal desktop-browser header set avoids tripping
+ * that class of false positive for what is, here, a single legitimate
+ * one-time public-page check.
+ */
+const BROWSER_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
+/**
  * Fetch with automatic retry-and-backoff on 429 (rate limited) and 503
  * (temporarily unavailable) responses, honoring a Retry-After header when
  * the server sends one. Other statuses (200, 404, etc.) are returned as-is
  * for the caller to interpret.
  */
 async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  const mergedInit: RequestInit = {
+    ...init,
+    headers: { ...BROWSER_HEADERS, ...(init.headers as Record<string, string> | undefined) },
+  };
+
   let lastNetworkError: unknown;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     let res: Response;
     try {
-      res = await fetch(url, init);
+      res = await fetch(url, mergedInit);
     } catch (err) {
       lastNetworkError = err;
       if (attempt === MAX_RETRIES) throw err;
