@@ -16,6 +16,11 @@
 //     fully JS-rendered/headless storefront our plain HTML fetch can't
 //     see), fall back to the JSON feed's totals and flag that a fallback
 //     was used, rather than silently reporting zero.
+//
+// Requests are deliberately kept modest and retried with backoff on 429s —
+// some stores rate-limit or bot-block bursts of concurrent requests, and a
+// naive high-concurrency fetch pattern can trip that even for a completely
+// legitimate one-time check.
 
 export interface StockCheckResult {
   input: string;
@@ -37,12 +42,67 @@ export class StockCheckError extends Error {}
  */
 export class NotShopifyError extends StockCheckError {}
 
+/**
+ * Raised when a site persistently rate-limits us (HTTP 429) even after
+ * retrying with backoff. Kept distinct from other failures so the UI can
+ * show a clearer, more actionable message than a generic error.
+ */
+export class RateLimitedError extends StockCheckError {}
+
 const PAGE_SIZE = 250; // Shopify's max page size for the JSON feed
 const MAX_PAGES = 40; // safety cap (=10,000 products) to avoid runaway loops
-const PAGE_BATCH_SIZE = 6; // pages fetched concurrently per round, to stay fast
+const PAGE_BATCH_SIZE = 4; // pages fetched concurrently per round
 
 const MAX_HTML_PAGES = 30; // safety cap for storefront pagination walk
-const HTML_BATCH_SIZE = 4; // storefront pages fetched concurrently per round
+const HTML_BATCH_SIZE = 3; // storefront pages fetched concurrently per round
+
+const MAX_RETRIES = 3;
+const BASE_RETRY_DELAY_MS = 600;
+const MAX_RETRY_DELAY_MS = 8000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetch with automatic retry-and-backoff on 429 (rate limited) and 503
+ * (temporarily unavailable) responses, honoring a Retry-After header when
+ * the server sends one. Other statuses (200, 404, etc.) are returned as-is
+ * for the caller to interpret.
+ */
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  let lastNetworkError: unknown;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (err) {
+      lastNetworkError = err;
+      if (attempt === MAX_RETRIES) throw err;
+      await sleep(Math.min(BASE_RETRY_DELAY_MS * 2 ** attempt, MAX_RETRY_DELAY_MS));
+      continue;
+    }
+
+    if ((res.status === 429 || res.status === 503) && attempt < MAX_RETRIES) {
+      const retryAfterHeader = res.headers.get("retry-after");
+      const retryAfterMs = retryAfterHeader ? parseFloat(retryAfterHeader) * 1000 : NaN;
+      const delay = Number.isFinite(retryAfterMs)
+        ? retryAfterMs
+        : BASE_RETRY_DELAY_MS * 2 ** attempt + Math.random() * 300;
+      await sleep(Math.min(delay, MAX_RETRY_DELAY_MS));
+      continue;
+    }
+
+    return res;
+  }
+
+  // Unreachable in practice (loop always returns or throws above), but
+  // keeps TypeScript happy and covers a stray network-only failure path.
+  throw lastNetworkError instanceof Error
+    ? lastNetworkError
+    : new StockCheckError("Request failed after retries.");
+}
 
 /**
  * Accepts either a bare store domain, a homepage URL, or a full collection
@@ -67,28 +127,29 @@ function resolveCollectionFeed(input: string): { origin: string; handle: string 
   return { origin: `${parsed.protocol}//${parsed.host}`, handle };
 }
 
-interface ProductInfo {
-  handle: string;
-  available: boolean;
-}
-
 interface PageFetch {
   products: any[];
 }
 
 /**
  * Fetches one page of the collection's JSON feed. Classifies failures so
- * callers can tell "definitely not Shopify" apart from a transient error.
+ * callers can tell "definitely not Shopify" apart from a transient error
+ * or persistent rate-limiting.
  */
 async function fetchJsonPage(origin: string, handle: string, page: number): Promise<PageFetch> {
   const url = `${origin}/collections/${handle}/products.json?limit=${PAGE_SIZE}&page=${page}`;
   let res: Response;
   try {
-    res = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" });
+    res = await fetchWithRetry(url, { headers: { Accept: "application/json" }, cache: "no-store" });
   } catch (err) {
     throw new StockCheckError(`Could not reach ${origin} (${(err as Error).message}).`);
   }
 
+  if (res.status === 429 || res.status === 503) {
+    throw new RateLimitedError(
+      `${origin} is rate-limiting requests (HTTP ${res.status}). Try checking this site again in a minute.`
+    );
+  }
   if (res.status === 404) {
     throw new NotShopifyError(`${origin} returned 404 for collection "${handle}".`);
   }
@@ -183,15 +244,23 @@ function extractProductHandles(html: string): Set<string> {
   return handles;
 }
 
+/**
+ * Fetches one storefront collection HTML page. Returns null only for a
+ * legitimate "no more pages" signal (404). A persistent rate limit throws
+ * instead of returning null, so pagination doesn't mistake "blocked" for
+ * "end of list" and silently under-count.
+ */
 async function fetchCollectionHtml(origin: string, handle: string, page: number): Promise<string | null> {
   const url = `${origin}/collections/${handle}?page=${page}`;
-  try {
-    const res = await fetch(url, { headers: { Accept: "text/html" }, cache: "no-store" });
-    if (!res.ok) return null;
-    return await res.text();
-  } catch {
-    return null;
+  const res = await fetchWithRetry(url, { headers: { Accept: "text/html" }, cache: "no-store" });
+
+  if (res.status === 429 || res.status === 503) {
+    throw new RateLimitedError(
+      `${origin} is rate-limiting requests (HTTP ${res.status}). Try checking this site again in a minute.`
+    );
   }
+  if (!res.ok) return null; // 404 or similar — treated as end of pagination
+  return await res.text();
 }
 
 /**
@@ -248,11 +317,11 @@ export async function checkCollectionStock(input: string): Promise<StockCheckRes
   const { origin, handle } = resolveCollectionFeed(input);
 
   async function pull(handleToUse: string): Promise<StockCheckResult> {
-    // Run both lookups concurrently — they're independent data sources.
-    const [availability, storefrontHandles] = await Promise.all([
-      pullJsonAvailability(origin, handleToUse),
-      fetchStorefrontHandles(origin, handleToUse),
-    ]);
+    // Run sequentially rather than concurrently — doing both fetch phases
+    // at once doubles the simultaneous request burst against the same
+    // store, which is exactly what tends to trip rate limits.
+    const availability = await pullJsonAvailability(origin, handleToUse);
+    const storefrontHandles = await fetchStorefrontHandles(origin, handleToUse);
 
     if (storefrontHandles.size > 0) {
       let inStock = 0;
