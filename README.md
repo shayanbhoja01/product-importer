@@ -95,10 +95,14 @@ Visit `http://localhost:3000`.
   store, it automatically falls back to checking that store's "all products"
   collection before concluding it isn't Shopify.
 - Each website is checked as its own request, and pages within a store are
-  fetched in parallel batches rather than one at a time — this keeps large
-  catalogs fast and means one slow site can't block or fail the rest of the
-  list. If you see "Timed out" on a single very large store's row, it's safe
-  to retry just that one line on its own.
+  fetched in small concurrent batches rather than one at a time — this keeps
+  large catalogs fast and means one slow site can't block or fail the rest
+  of the list. If you see "Timed out" on a single very large store's row,
+  it's safe to retry just that one line on its own.
+- Requests are automatically retried with backoff if a store briefly
+  rate-limits us (HTTP 429). If a store persistently rate-limits the check,
+  that row shows **Failed** with a message suggesting to retry that one
+  site again shortly — the rest of your list isn't affected.
 - Results can be downloaded as a CSV log (website, status, counts, notes) —
   same as the importer's log.
 - This only reports counts — it doesn't create, modify, or import anything.
