@@ -294,6 +294,15 @@ function StockCheckTool() {
           )
         );
       }
+
+      // Small pause between different sites. Several unrelated stores can
+      // share the same bot-protection provider, which may notice rapid
+      // back-to-back checks across many different storefronts from one
+      // source and start blocking — a brief gap here avoids looking like
+      // that kind of scripted, high-speed scraping pattern.
+      if (i < sites.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
     }
 
     setRunning(false);
