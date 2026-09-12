@@ -248,17 +248,23 @@ function StockCheckTool() {
     );
   }, [results]);
 
-  async function handleCheck() {
-    if (!sites.length || running) return;
-    setError(null);
+  async function runChecks(indices: number[]) {
     setRunning(true);
-    setResults(sites.map((input) => ({ input, status: "Done", pending: true } as StockRowState)));
 
-    // Check one site per request, updating results as each one finishes.
-    // Keeps each server call fast (avoids serverless timeouts on large
-    // catalogs) and means one slow/stuck site can't block the rest.
-    for (let i = 0; i < sites.length; i++) {
+    // Adaptive backoff: a small pause between sites by default, but if we
+    // see several rate-limit failures in a row, that's the signature of a
+    // shared/aggregate limit (e.g. many stores behind the same regional
+    // security provider tracking our one source IP across all of them,
+    // not just per-site) — so we back off much harder and longer until
+    // a request succeeds again, rather than hammering into a quota that
+    // isn't going to reset on its own in milliseconds.
+    let consecutiveRateLimited = 0;
+
+    for (let n = 0; n < indices.length; n++) {
+      const i = indices[n];
       const site = sites[i];
+      let wasRateLimited = false;
+
       try {
         const res = await fetch("/api/stock-check", {
           method: "POST",
@@ -286,26 +292,50 @@ function StockCheckTool() {
           status: "Failed",
           note: "No result returned.",
         };
+        wasRateLimited = row.status === "Failed" && !!row.note?.includes("rate-limiting");
         setResults((prev) => prev.map((r, idx) => (idx === i ? row : r)));
       } catch (err) {
+        const message = (err as Error).message;
+        wasRateLimited = message.includes("rate-limiting");
         setResults((prev) =>
-          prev.map((r, idx) =>
-            idx === i ? { input: site, status: "Failed", note: (err as Error).message } : r
-          )
+          prev.map((r, idx) => (idx === i ? { input: site, status: "Failed", note: message } : r))
         );
       }
 
-      // Small pause between different sites. Several unrelated stores can
-      // share the same bot-protection provider, which may notice rapid
-      // back-to-back checks across many different storefronts from one
-      // source and start blocking — a brief gap here avoids looking like
-      // that kind of scripted, high-speed scraping pattern.
-      if (i < sites.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 350));
+      consecutiveRateLimited = wasRateLimited ? consecutiveRateLimited + 1 : 0;
+
+      if (n < indices.length - 1) {
+        // Base pause between any two sites. On top of that, once a run of
+        // rate-limit failures shows up, wait substantially longer — the
+        // pause grows with how many we've seen in a row, up to a cap.
+        const backoffMs =
+          consecutiveRateLimited >= 2
+            ? Math.min(4000 * 2 ** (consecutiveRateLimited - 2), 20000)
+            : 350;
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
     }
 
     setRunning(false);
+  }
+
+  async function handleCheck() {
+    if (!sites.length || running) return;
+    setError(null);
+    setResults(sites.map((input) => ({ input, status: "Done", pending: true } as StockRowState)));
+    await runChecks(sites.map((_, i) => i));
+  }
+
+  async function retryFailed() {
+    if (running) return;
+    const failedIndices = results
+      .map((r, i) => (r.status === "Failed" ? i : -1))
+      .filter((i) => i >= 0);
+    if (!failedIndices.length) return;
+    setResults((prev) =>
+      prev.map((r, idx) => (failedIndices.includes(idx) ? { ...r, pending: true } : r))
+    );
+    await runChecks(failedIndices);
   }
 
   function downloadLog() {
@@ -383,6 +413,11 @@ function StockCheckTool() {
         <div className="card">
           <div className="results-head">
             <h2>Results</h2>
+            {!running && counts.Failed > 0 && (
+              <button className="link-btn" onClick={retryFailed}>
+                ↻ Retry {counts.Failed} failed
+              </button>
+            )}
           </div>
 
           <div className="manifest">
