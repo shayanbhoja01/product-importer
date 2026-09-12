@@ -103,6 +103,18 @@ Visit `http://localhost:3000`.
   rate-limits us (HTTP 429). If a store persistently rate-limits the check,
   that row shows **Failed** with a message suggesting to retry that one
   site again shortly — the rest of your list isn't affected.
+- **Large batches (30+ sites):** many smaller stores share the same
+  regional security/CDN provider, which can track requests across *all*
+  the stores it protects, not just one — so a long run can trigger a
+  shared rate limit partway through even though each individual site only
+  got one or two requests. The tool detects a run of consecutive
+  rate-limit failures and automatically slows down (pausing several
+  seconds, growing progressively) until requests start succeeding again.
+  After a check finishes, a **"Retry N failed"** button appears above the
+  results so you can re-run just the sites that got throttled out, without
+  redoing the whole list. For very large lists, checking them in smaller
+  batches (15–20 at a time) a few minutes apart is the most reliable
+  approach.
 - Results can be downloaded as a CSV log (website, status, counts, notes) —
   same as the importer's log.
 - This only reports counts — it doesn't create, modify, or import anything.
