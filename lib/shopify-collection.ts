@@ -60,6 +60,15 @@ const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 600;
 const MAX_RETRY_DELAY_MS = 8000;
 
+// Pause between successive rounds of page-batches within a single site's
+// own pagination (JSON pull or storefront walk). Without this, a single
+// large-catalog store (e.g. 1,000+ products) can fire off dozens of
+// requests to itself in a tight burst — and if that store shares a
+// regional security/CDN provider with other stores on the list, that
+// burst alone can exhaust a quota shared across all of them, well before
+// any per-site or cross-site backoff logic would even notice a problem.
+const INTER_BATCH_PACING_MS = 250;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -242,6 +251,9 @@ async function pullJsonAvailability(
     }
 
     nextPage += batchPages.length;
+    if (!reachedEnd && nextPage <= MAX_PAGES) {
+      await sleep(INTER_BATCH_PACING_MS);
+    }
   }
 
   return availability;
@@ -322,6 +334,9 @@ async function fetchStorefrontHandles(origin: string, handle: string): Promise<S
 
     if (stop) break;
     page += batchPages.length;
+    if (page <= MAX_HTML_PAGES) {
+      await sleep(INTER_BATCH_PACING_MS);
+    }
   }
 
   return seen;
